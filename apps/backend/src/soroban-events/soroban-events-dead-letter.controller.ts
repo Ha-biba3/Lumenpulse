@@ -165,6 +165,18 @@ export class SorobanEventsDeadLetterController {
         });
         return { id: item.id, success: true, value };
       } catch (error) {
+        await this.auditService.create({
+          actorId: request.user.id,
+          actorEmail: request.user.email,
+          endpoint: 'POST /soroban-events/dead-letter/bulk/replay',
+          params: {
+            dlqId: item.id,
+            bulkOperationId,
+            status: 'failed',
+            error: error instanceof Error ? error.message : 'Replay failed',
+          },
+          responseStatus: HttpStatus.BAD_REQUEST,
+        });
         return { id: item.id, success: false, error: error instanceof Error ? error.message : 'Replay failed' };
       }
     }));

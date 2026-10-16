@@ -120,9 +120,15 @@ export class ReviewHistoryController {
           targetId: item.targetId,
           targetType: item.targetType,
           bulkOperationId,
-        });
+        }).catch(() => undefined);
         return { index, success: true, value };
       } catch (error) {
+        await this.auditService.log('create_review_decision_failed', req.user.id, null, {
+          targetId: item.targetId,
+          targetType: item.targetType,
+          bulkOperationId,
+          error: error instanceof Error ? error.message : 'Decision failed',
+        }).catch(() => undefined);
         return { index, success: false, error: error instanceof Error ? error.message : 'Decision failed' };
       }
     }));

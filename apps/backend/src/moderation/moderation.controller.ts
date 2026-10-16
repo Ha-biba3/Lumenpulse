@@ -155,9 +155,10 @@ export class ModerationController {
     if (ids.some((id) => typeof id !== 'string' || !id) || new Set(ids).size !== ids.length) {
       throw new BadRequestException('Each item must have a unique report id');
     }
-    if (items.some(({ update }) => !update || typeof update !== 'object' ||
-      (update.status !== undefined && !Object.values(ReportStatus).includes(update.status)) ||
-      (update.reviewNotes !== undefined && (typeof update.reviewNotes !== 'string' || update.reviewNotes.length > 2000)))) {
+    if (items.some((item) => !item || !item.update || typeof item.update !== 'object' ||
+      Array.isArray(item.update) ||
+      (item.update.status !== undefined && !Object.values(ReportStatus).includes(item.update.status)) ||
+      (item.update.reviewNotes !== undefined && (typeof item.update.reviewNotes !== 'string' || item.update.reviewNotes.length > 2000)))) {
       throw new BadRequestException('Each update must contain a valid status and reviewNotes value');
     }
 
@@ -169,7 +170,57 @@ export class ModerationController {
         );
         return { id: item.id, success: true, value };
       } catch (error) {
+        await this.moderationService.recordBulkItemFailure(
+          req.user.id,
+          bulkOperationId,
+          item.id,
+          error instanceof Error ? error.message : 'Update failed',
+        );
         return { id: item.id, success: false, error: error instanceof Error ? error.message : 'Update failed' };
+      }
+    }));
+    return { bulkOperationId, results };
+  }
+
+  @Post('queue/assign/bulk')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
+  @ApiOperation({ summary: 'Assign reviewers to reports independently in bulk' })
+  async assignReviewersBulk(
+    @Req() req: RequestWithUser,
+    @Body() body: { items: Array<{ id: string; reviewerId?: string | null }> },
+  ) {
+    const items = body?.items;
+    if (!Array.isArray(items) || items.length < 1 || items.length > 50) {
+      throw new BadRequestException('items must contain between 1 and 50 assignments');
+    }
+    const ids = items.map((item) => item?.id);
+    if (ids.some((id) => typeof id !== 'string' || !id) || new Set(ids).size !== ids.length) {
+      throw new BadRequestException('Each item must have a unique report id');
+    }
+    if (items.some((item) => !item || (item.reviewerId !== undefined && item.reviewerId !== null && typeof item.reviewerId !== 'string'))) {
+      throw new BadRequestException('Each reviewerId must be a string or null');
+    }
+
+    const bulkOperationId = randomUUID();
+    const results = await Promise.all(items.map(async (item) => {
+      try {
+        const value = await this.moderationService.assignReviewer(
+          item.id,
+          req.user.id,
+          item.reviewerId ?? undefined,
+          bulkOperationId,
+        );
+        return { id: item.id, success: true, value };
+      } catch (error) {
+        await this.moderationService.recordBulkItemFailure(
+          req.user.id,
+          bulkOperationId,
+          item.id,
+          error instanceof Error ? error.message : 'Assignment failed',
+        );
+        return { id: item.id, success: false, error: error instanceof Error ? error.message : 'Assignment failed' };
       }
     }));
     return { bulkOperationId, results };
