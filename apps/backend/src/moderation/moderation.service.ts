@@ -189,6 +189,7 @@ export class ModerationService {
     id: string,
     reviewerId: string,
     dto: UpdateReportDto,
+    bulkOperationId?: string,
   ): Promise<ContentReport> {
     const report = await this.getReportById(id);
 
@@ -216,6 +217,12 @@ export class ModerationService {
     }
 
     const updatedReport = await this.reportsRepository.save(report);
+    await this.auditService.log('update_moderation_report', reviewerId, null, {
+      reportId: id,
+      previousStatus,
+      status: updatedReport.status,
+      bulkOperationId: bulkOperationId ?? null,
+    });
     this.logger.log(
       `Report ${id} updated by ${reviewerId}. Status: ${updatedReport.status}`,
     );

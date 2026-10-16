@@ -25,11 +25,13 @@ import { CreateReportDto } from './dto/create-report.dto';
 import { UpdateReportDto } from './dto/update-report.dto';
 import { QueryReportsDto } from './dto/query-reports.dto';
 import { AssignReviewerDto } from './dto/assign-reviewer.dto';
-import { ContentReport } from './entities/content-report.entity';
+import { ContentReport, ReportStatus } from './entities/content-report.entity';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/decorators/auth.decorators';
 import { UserRole } from '../users/entities/user.entity';
+import { randomUUID } from 'crypto';
+import { BadRequestException } from '@nestjs/common';
 
 // Unified Authenticated Request Interface
 interface RequestWithUser extends Request {
@@ -134,6 +136,43 @@ export class ModerationController {
       req.user.id,
       updateReportDto,
     );
+  }
+
+  @Post('queue/bulk')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
+  @ApiOperation({ summary: 'Apply independent moderation updates in bulk' })
+  async updateReportsBulk(
+    @Req() req: RequestWithUser,
+    @Body() body: { items: Array<{ id: string; update: UpdateReportDto }> },
+  ) {
+    const items = body?.items;
+    if (!Array.isArray(items) || items.length < 1 || items.length > 50) {
+      throw new BadRequestException('items must contain between 1 and 50 updates');
+    }
+    const ids = items.map((item) => item?.id);
+    if (ids.some((id) => typeof id !== 'string' || !id) || new Set(ids).size !== ids.length) {
+      throw new BadRequestException('Each item must have a unique report id');
+    }
+    if (items.some(({ update }) => !update || typeof update !== 'object' ||
+      (update.status !== undefined && !Object.values(ReportStatus).includes(update.status)) ||
+      (update.reviewNotes !== undefined && (typeof update.reviewNotes !== 'string' || update.reviewNotes.length > 2000)))) {
+      throw new BadRequestException('Each update must contain a valid status and reviewNotes value');
+    }
+
+    const bulkOperationId = randomUUID();
+    const results = await Promise.all(items.map(async (item) => {
+      try {
+        const value = await this.moderationService.updateReport(
+          item.id, req.user.id, item.update, bulkOperationId,
+        );
+        return { id: item.id, success: true, value };
+      } catch (error) {
+        return { id: item.id, success: false, error: error instanceof Error ? error.message : 'Update failed' };
+      }
+    }));
+    return { bulkOperationId, results };
   }
 
   @Patch('queue/:id/assign')
