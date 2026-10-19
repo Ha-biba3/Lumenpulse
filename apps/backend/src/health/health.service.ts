@@ -5,7 +5,7 @@ import { HealthCheckResult } from '@nestjs/terminus';
 import { firstValueFrom } from 'rxjs';
 import { DataSource } from 'typeorm';
 import { CacheService } from '../cache/cache.service';
-import { config } from '../lib/config';
+import { DataProcessingClient } from '../data-processing/data-processing.client';
 import {
   LatencyBudgetHealthService,
   LatencyBudgetReport,
@@ -18,7 +18,15 @@ export interface DependencyStatus {
   message?: string;
 }
 
+export interface ReleaseInfo {
+  /** Release tag baked into the image (`APP_VERSION`), or `dev` outside a release build. */
+  version: string;
+  /** Commit the image was built from (`GIT_SHA`). */
+  gitSha: string;
+}
+
 export interface LumenpulseHealthReport extends HealthCheckResult {
+  release?: ReleaseInfo;
   summary: 'healthy' | 'degraded' | 'down';
   dependencies: Record<string, DependencyStatus>;
   latencyBudget: LatencyBudgetReport;
@@ -33,6 +41,7 @@ export class HealthService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly cacheService: CacheService,
     private readonly httpService: HttpService,
+    private readonly python: DataProcessingClient,
     private readonly latencyBudgetHealthService: LatencyBudgetHealthService,
   ) {}
 
@@ -49,7 +58,12 @@ export class HealthService {
           this.get('https://api.exchangerate-api.com/v4/latest/USD'),
         ),
         this.probe('python', false, () =>
-          this.get(config.python.apiUrl.replace(/\/$/, '') + '/health'),
+          firstValueFrom(
+            this.python.get('/health', {
+              timeout: CHECK_TIMEOUT_MS,
+              retry: false,
+            }),
+          ),
         ),
       ]);
 
@@ -112,6 +126,10 @@ export class HealthService {
       latencyBudget.overallState === 'degraded';
     return {
       status: hardDown ? 'error' : 'ok',
+      release: {
+        version: process.env.APP_VERSION || 'dev',
+        gitSha: process.env.GIT_SHA || 'unknown',
+      },
       summary: hardDown ? 'down' : degraded ? 'degraded' : 'healthy',
       dependencies,
       latencyBudget,
